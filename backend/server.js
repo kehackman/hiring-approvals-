@@ -6,16 +6,16 @@ const { initDb } = require('./db');
 const usersRouter = require('./routes/users');
 const requestsRouter = require('./routes/requests');
 const approvalsRouter = require('./routes/approvals');
-const { startReminderJob } = require('./services/reminders');
+const { runReminders } = require('./services/reminders');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 const allowedOrigins = [
-  process.env.APP_URL || 'http://localhost:5173',
+  process.env.APP_URL,
   'http://localhost:5173',
   'http://localhost:4173',
-];
+].filter(Boolean);
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -35,6 +35,21 @@ app.use('/api/users', usersRouter);
 app.use('/api/requests', requestsRouter);
 app.use('/api/approvals', approvalsRouter);
 
+// Reminder webhook — called by cron-job.org every hour
+app.post('/api/reminders/run', async (req, res) => {
+  const secret = req.headers['x-reminder-secret'];
+  if (process.env.REMINDER_SECRET && secret !== process.env.REMINDER_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    await runReminders();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Reminder job error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Fallback to frontend in production
 if (process.env.NODE_ENV === 'production') {
   app.get('*', (req, res) => {
@@ -42,9 +57,16 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
-initDb();
-startReminderJob();
+async function start() {
+  try {
+    await initDb();
+    app.listen(PORT, () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  } catch (err) {
+    console.error('Failed to start server:', err.message);
+    process.exit(1);
+  }
+}
 
-app.listen(PORT, () => {
-  console.log(`Backend running on http://localhost:${PORT}`);
-});
+start();

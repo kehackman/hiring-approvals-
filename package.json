@@ -6,7 +6,7 @@
     "dev:backend": "cd backend && npm run dev",
     "dev:frontend": "cd frontend && npm run dev",
     "install:all": "cd backend && npm install && cd ../frontend && npm install",
-    "build:railway": "cd backend && npm install && cd ../frontend && npm install && npm run build",
+    "build:render": "cd backend && npm install && cd ../frontend && npm install && npm run build",
     "build": "cd frontend && npm run build",
     "start": "node backend/server.js"
   },

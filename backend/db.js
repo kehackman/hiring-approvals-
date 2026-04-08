@@ -1,46 +1,42 @@
-const { DatabaseSync } = require('node:sqlite');
-const path = require('path');
+const { Pool } = require('pg');
 
-const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'approvals.db');
-const db = new DatabaseSync(dbPath);
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+});
 
-// Enable WAL mode for better performance
-db.exec('PRAGMA journal_mode = WAL');
-
-function initDb() {
-  db.exec(`
+async function initDb() {
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS requests (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       title TEXT NOT NULL,
       submitted_by_name TEXT NOT NULL,
       submitted_by_email TEXT NOT NULL,
       status TEXT DEFAULT 'pending',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS approval_steps (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      request_id INTEGER NOT NULL,
-      user_id INTEGER NOT NULL,
+      id SERIAL PRIMARY KEY,
+      request_id INTEGER NOT NULL REFERENCES requests(id),
+      user_id INTEGER NOT NULL REFERENCES users(id),
       step_order INTEGER NOT NULL,
       status TEXT DEFAULT 'waiting',
       token TEXT UNIQUE NOT NULL,
       comment TEXT,
-      responded_at DATETIME,
-      last_reminded_at DATETIME,
-      notified_at DATETIME,
-      FOREIGN KEY (request_id) REFERENCES requests(id),
-      FOREIGN KEY (user_id) REFERENCES users(id)
+      responded_at TIMESTAMP,
+      last_reminded_at TIMESTAMP,
+      notified_at TIMESTAMP
     );
   `);
   console.log('Database initialized');
 }
 
-module.exports = { db, initDb };
+module.exports = { pool, initDb };

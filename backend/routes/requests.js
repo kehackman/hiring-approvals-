@@ -1,30 +1,38 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../db');
+const { pool } = require('../db');
 const { v4: uuidv4 } = require('uuid');
 const { sendApprovalRequest } = require('../services/email');
 
 // Get all requests
-router.get('/', (req, res) => {
-  const requests = db.prepare('SELECT * FROM requests ORDER BY created_at DESC').all();
-  res.json(requests);
+router.get('/', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM requests ORDER BY created_at DESC');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Get single request with full chain
-router.get('/:id', (req, res) => {
-  const request = db.prepare('SELECT * FROM requests WHERE id = ?').get(req.params.id);
-  if (!request) return res.status(404).json({ error: 'Request not found.' });
+router.get('/:id', async (req, res) => {
+  try {
+    const { rows: reqRows } = await pool.query('SELECT * FROM requests WHERE id = $1', [req.params.id]);
+    if (!reqRows[0]) return res.status(404).json({ error: 'Request not found.' });
 
-  const steps = db.prepare(`
-    SELECT s.id, s.step_order, s.status, s.comment, s.responded_at, s.notified_at,
-           u.name, u.email
-    FROM approval_steps s
-    JOIN users u ON s.user_id = u.id
-    WHERE s.request_id = ?
-    ORDER BY s.step_order
-  `).all(req.params.id);
+    const { rows: steps } = await pool.query(`
+      SELECT s.id, s.step_order, s.status, s.comment, s.responded_at, s.notified_at,
+             u.name, u.email
+      FROM approval_steps s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.request_id = $1
+      ORDER BY s.step_order
+    `, [req.params.id]);
 
-  res.json({ ...request, steps });
+    res.json({ ...reqRows[0], steps });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Create new request
@@ -38,49 +46,54 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'At least one approver is required.' });
   }
 
-  let requestId;
-  let firstStep;
+  const client = await pool.connect();
+  let requestId, firstStep;
 
-  db.exec('BEGIN');
   try {
-    const result = db.prepare(
-      'INSERT INTO requests (title, submitted_by_name, submitted_by_email) VALUES (?, ?, ?)'
-    ).run(title.trim(), submitted_by_name.trim(), submitted_by_email.toLowerCase().trim());
+    await client.query('BEGIN');
 
-    requestId = result.lastInsertRowid;
+    const { rows: reqRows } = await client.query(
+      'INSERT INTO requests (title, submitted_by_name, submitted_by_email) VALUES ($1, $2, $3) RETURNING *',
+      [title.trim(), submitted_by_name.trim(), submitted_by_email.toLowerCase().trim()]
+    );
+    requestId = reqRows[0].id;
 
-    approver_ids.forEach((userId, index) => {
+    for (let i = 0; i < approver_ids.length; i++) {
       const token = uuidv4();
-      const status = index === 0 ? 'pending' : 'waiting';
-      db.prepare(
-        'INSERT INTO approval_steps (request_id, user_id, step_order, status, token) VALUES (?, ?, ?, ?, ?)'
-      ).run(requestId, userId, index + 1, status, token);
-    });
+      const status = i === 0 ? 'pending' : 'waiting';
+      await client.query(
+        'INSERT INTO approval_steps (request_id, user_id, step_order, status, token) VALUES ($1, $2, $3, $4, $5)',
+        [requestId, approver_ids[i], i + 1, status, token]
+      );
+    }
 
-    firstStep = db.prepare(`
+    const { rows: stepRows } = await client.query(`
       SELECT s.*, u.name, u.email
       FROM approval_steps s
       JOIN users u ON s.user_id = u.id
-      WHERE s.request_id = ? AND s.step_order = 1
-    `).get(requestId);
+      WHERE s.request_id = $1 AND s.step_order = 1
+    `, [requestId]);
+    firstStep = stepRows[0];
 
-    db.exec('COMMIT');
+    await client.query('COMMIT');
   } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
+    await client.query('ROLLBACK');
+    return res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
   }
 
-  const request = db.prepare('SELECT * FROM requests WHERE id = ?').get(requestId);
-  const allSteps = db.prepare(`
+  const { rows: reqRows } = await pool.query('SELECT * FROM requests WHERE id = $1', [requestId]);
+  const { rows: allSteps } = await pool.query(`
     SELECT s.step_order, s.status, s.comment, s.responded_at, u.name, u.email
     FROM approval_steps s JOIN users u ON s.user_id = u.id
-    WHERE s.request_id = ? ORDER BY s.step_order
-  `).all(requestId);
+    WHERE s.request_id = $1 ORDER BY s.step_order
+  `, [requestId]);
 
   let emailWarning = null;
   try {
-    await sendApprovalRequest(firstStep, request, allSteps);
-    db.prepare('UPDATE approval_steps SET notified_at = CURRENT_TIMESTAMP WHERE id = ?').run(firstStep.id);
+    await sendApprovalRequest(firstStep, reqRows[0], allSteps);
+    await pool.query('UPDATE approval_steps SET notified_at = NOW() WHERE id = $1', [firstStep.id]);
   } catch (err) {
     console.error('Failed to send initial email:', err.message);
     emailWarning = 'Request created, but the notification email could not be sent. Check your SMTP settings.';
