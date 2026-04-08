@@ -1,0 +1,6 @@
+[build]
+buildCommand = "npm run build:railway"
+
+[deploy]
+startCommand = "node backend/server.js"
+healthcheckPath = "/api/users"
