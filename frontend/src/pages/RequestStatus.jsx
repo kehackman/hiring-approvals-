@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 
 function formatDate(str) {
   if (!str) return '—'
@@ -19,9 +19,12 @@ function stepBadge(step) {
 
 export default function RequestStatus() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
 
   useEffect(() => {
     fetch(`/api/requests/${id}`)
@@ -32,6 +35,21 @@ export default function RequestStatus() {
       .then(d => { if (d) { setData(d); setLoading(false) } })
       .catch(() => setLoading(false))
   }, [id])
+
+  async function handleDelete() {
+    if (!window.confirm('Are you sure you want to delete this request? This cannot be undone.')) return
+    setDeleteError('')
+    setDeleting(true)
+    try {
+      const res = await fetch(`/api/requests/${id}`, { method: 'DELETE' })
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error || 'Could not delete request.')
+      navigate('/requests')
+    } catch (err) {
+      setDeleteError(err.message)
+      setDeleting(false)
+    }
+  }
 
   if (loading) return <div className="loading">Loading...</div>
   if (notFound) return (
@@ -58,7 +76,18 @@ export default function RequestStatus() {
         <div className="request-title-row">
           <h1>{data.title}</h1>
           <span className={`badge badge-${data.status}`}>{data.status}</span>
+          {data.status === 'pending' && (
+            <button
+              className="btn btn-danger btn-sm"
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              {deleting ? 'Deleting...' : 'Delete Request'}
+            </button>
+          )}
         </div>
+
+        {deleteError && <div className="alert alert-error">{deleteError}</div>}
 
         <hr className="divider" />
 

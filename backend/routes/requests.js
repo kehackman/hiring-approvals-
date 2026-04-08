@@ -125,4 +125,29 @@ router.post('/', async (req, res) => {
   res.json({ id: requestId, warning: emailWarning });
 });
 
+// Delete a pending request
+router.delete('/:id', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows } = await client.query('SELECT status FROM requests WHERE id = $1', [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'Request not found.' });
+    if (rows[0].status !== 'pending') {
+      return res.status(400).json({ error: 'Only pending requests can be deleted.' });
+    }
+
+    await client.query('DELETE FROM approval_steps WHERE request_id = $1', [req.params.id]);
+    await client.query('DELETE FROM requests WHERE id = $1', [req.params.id]);
+
+    await client.query('COMMIT');
+    res.json({ success: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = router;
