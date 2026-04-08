@@ -95,8 +95,9 @@ router.post('/', async (req, res) => {
     await sendApprovalRequest(firstStep, reqRows[0], allSteps);
     await pool.query('UPDATE approval_steps SET notified_at = NOW() WHERE id = $1', [firstStep.id]);
   } catch (err) {
-    console.error('Failed to send initial email:', err.message);
-    emailWarning = 'Request created, but the notification email could not be sent. Check your SMTP settings.';
+    const detail = err.response ? JSON.stringify(err.response.body) : err.message;
+    console.error('Failed to send initial email:', detail);
+    emailWarning = `Request created, but the notification email could not be sent. Error: ${detail}`;
   }
 
   res.json({ id: requestId, warning: emailWarning });

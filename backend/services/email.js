@@ -1,17 +1,8 @@
-const nodemailer = require('nodemailer');
-
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: parseInt(process.env.SMTP_PORT || '587'),
-  secure: process.env.SMTP_SECURE === 'true',
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
+const sgMail = require('@sendgrid/mail');
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 const APP_URL = process.env.APP_URL || 'http://localhost:5173';
-const FROM_EMAIL = process.env.FROM_EMAIL || process.env.SMTP_USER;
+const FROM_EMAIL = process.env.FROM_EMAIL;
 
 function formatDate(dateStr) {
   return new Date(dateStr).toLocaleDateString('en-US', {
@@ -57,7 +48,7 @@ async function sendApprovalRequest(step, request, allSteps = []) {
   const approvalUrl = `${APP_URL}/approve/${step.token}`;
   const trackingUrl = `${APP_URL}/request/${request.id}`;
 
-  await transporter.sendMail({
+  await sgMail.send({
     from: `"Hiring Approvals" <${FROM_EMAIL}>`,
     to: step.email,
     subject: `Action Required: Approval for "${request.title}"`,
@@ -118,7 +109,7 @@ async function sendApprovalRequest(step, request, allSteps = []) {
 }
 
 async function sendDenialNotification(request, allSteps, denier) {
-  await transporter.sendMail({
+  await sgMail.send({
     from: `"Hiring Approvals" <${FROM_EMAIL}>`,
     to: request.submitted_by_email,
     subject: `Request Denied: "${request.title}"`,
@@ -153,7 +144,7 @@ async function sendDenialNotification(request, allSteps, denier) {
 }
 
 async function sendApprovedNotification(request, allSteps) {
-  await transporter.sendMail({
+  await sgMail.send({
     from: `"Hiring Approvals" <${FROM_EMAIL}>`,
     to: request.submitted_by_email,
     subject: `Fully Approved: "${request.title}"`,
@@ -194,7 +185,7 @@ async function sendApprovedNotification(request, allSteps) {
 async function sendReminder(step, request) {
   const approvalUrl = `${APP_URL}/approve/${step.token}`;
 
-  await transporter.sendMail({
+  await sgMail.send({
     from: `"Hiring Approvals" <${FROM_EMAIL}>`,
     to: step.email,
     subject: `Reminder: Approval Needed for "${request.title}"`,
