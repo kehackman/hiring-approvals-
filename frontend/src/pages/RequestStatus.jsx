@@ -9,11 +9,12 @@ function formatDate(str) {
   })
 }
 
-function statusLabel(status) {
-  if (status === 'approved') return 'Approved'
-  if (status === 'denied') return 'Denied'
-  if (status === 'pending') return 'Awaiting Response'
-  return 'Waiting'
+function stepBadge(step) {
+  if (step.role === 'observer') return <span className="badge badge-observer">Observer</span>
+  if (step.status === 'approved') return <span className="badge badge-approved">Approved</span>
+  if (step.status === 'denied') return <span className="badge badge-denied">Denied</span>
+  if (step.status === 'pending') return <span className="badge badge-pending">Awaiting Response</span>
+  return <span className="badge badge-waiting">Waiting</span>
 }
 
 export default function RequestStatus() {
@@ -41,8 +42,9 @@ export default function RequestStatus() {
   )
   if (!data) return null
 
-  const approvedCount = data.steps.filter(s => s.status === 'approved').length
-  const totalCount = data.steps.length
+  const approverSteps = data.steps.filter(s => s.role !== 'observer')
+  const approvedCount = approverSteps.filter(s => s.status === 'approved').length
+  const totalCount = approverSteps.length
 
   return (
     <div>
@@ -79,16 +81,26 @@ export default function RequestStatus() {
             <span className="meta-value">{approvedCount} of {totalCount} approved</span>
           </div>
         </div>
+
+        {data.notes && (
+          <>
+            <hr className="divider" />
+            <div>
+              <span className="meta-label">Notes from Submitter</span>
+              <p style={{ marginTop: 6, color: 'var(--text-secondary)', fontStyle: 'italic' }}>{data.notes}</p>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="card">
         <h2>Approval Chain</h2>
         <p style={{ color: 'var(--gray)', fontSize: '0.88rem', marginBottom: 16 }}>
-          All approvers and their responses are visible below.
+          All approvers and observers are shown below with their current status and comments.
         </p>
 
         {data.steps.map((step) => (
-          <div key={step.id} className={`chain-step status-${step.status}`}>
+          <div key={step.id} className={`chain-step status-${step.role === 'observer' ? 'observer' : step.status}`}>
             <div className="step-number">{step.step_order}</div>
             <div className="step-body">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
@@ -96,7 +108,7 @@ export default function RequestStatus() {
                   <div className="step-name">{step.name}</div>
                   <div className="step-email">{step.email}</div>
                 </div>
-                <span className={`badge badge-${step.status}`}>{statusLabel(step.status)}</span>
+                {stepBadge(step)}
               </div>
               {step.comment && (
                 <div className="step-comment">"{step.comment}"</div>

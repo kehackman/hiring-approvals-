@@ -1,16 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../db');
-const { sendApprovalRequest, sendDenialNotification, sendApprovedNotification } = require('../services/email');
+const { sendApprovalRequest, sendDenialNotification, sendApprovedNotification, sendObserverResolutionNotification } = require('../services/email');
 
 // Get approval step by token
 router.get('/:token', async (req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT s.id, s.step_order, s.status, s.comment, s.responded_at, s.token,
+      SELECT s.id, s.step_order, s.status, s.role, s.comment, s.responded_at, s.token,
              u.name, u.email,
              r.id as request_id, r.title, r.submitted_by_name, r.submitted_by_email,
-             r.status as request_status, r.created_at
+             r.status as request_status, r.created_at, r.notes
       FROM approval_steps s
       JOIN users u ON s.user_id = u.id
       JOIN requests r ON s.request_id = r.id
@@ -21,7 +21,7 @@ router.get('/:token', async (req, res) => {
     const step = rows[0];
 
     const { rows: allSteps } = await pool.query(`
-      SELECT s.step_order, s.status, s.comment, s.responded_at, u.name, u.email
+      SELECT s.step_order, s.status, s.role, s.comment, s.responded_at, u.name, u.email
       FROM approval_steps s
       JOIN users u ON s.user_id = u.id
       WHERE s.request_id = $1
@@ -60,24 +60,26 @@ router.post('/:token/approve', async (req, res) => {
     const request = reqRows[0];
 
     const { rows: allSteps } = await pool.query(`
-      SELECT s.step_order, s.status, s.comment, s.responded_at, u.name, u.email
+      SELECT s.step_order, s.status, s.role, s.comment, s.responded_at, u.name, u.email
       FROM approval_steps s JOIN users u ON s.user_id = u.id
       WHERE s.request_id = $1 ORDER BY s.step_order
     `, [step.request_id]);
 
+    // Find next approver (skip observers)
     const { rows: nextRows } = await pool.query(`
       SELECT s.*, u.name, u.email
       FROM approval_steps s
       JOIN users u ON s.user_id = u.id
-      WHERE s.request_id = $1 AND s.step_order = $2
-    `, [step.request_id, step.step_order + 1]);
+      WHERE s.request_id = $1 AND s.step_order > $2 AND s.role = 'approver' AND s.status = 'waiting'
+      ORDER BY s.step_order LIMIT 1
+    `, [step.request_id, step.step_order]);
 
     if (nextRows[0]) {
       const nextStep = nextRows[0];
       await pool.query('UPDATE approval_steps SET status = $1 WHERE id = $2', ['pending', nextStep.id]);
       try {
         const { rows: updatedSteps } = await pool.query(`
-          SELECT s.step_order, s.status, s.comment, s.responded_at, u.name, u.email
+          SELECT s.step_order, s.status, s.role, s.comment, s.responded_at, u.name, u.email
           FROM approval_steps s JOIN users u ON s.user_id = u.id
           WHERE s.request_id = $1 ORDER BY s.step_order
         `, [step.request_id]);
@@ -87,9 +89,12 @@ router.post('/:token/approve', async (req, res) => {
         console.error('Failed to notify next approver:', err.message);
       }
     } else {
+      // All approvers done — mark as approved
       await pool.query('UPDATE requests SET status = $1 WHERE id = $2', ['approved', step.request_id]);
       try {
         await sendApprovedNotification(request, allSteps);
+        // Notify observers of resolution
+        await notifyObservers(step.request_id, request, allSteps, 'approved');
       } catch (err) {
         console.error('Failed to send approval completion email:', err.message);
       }
@@ -126,13 +131,15 @@ router.post('/:token/deny', async (req, res) => {
 
     const { rows: reqRows } = await pool.query('SELECT * FROM requests WHERE id = $1', [step.request_id]);
     const { rows: allSteps } = await pool.query(`
-      SELECT s.step_order, s.status, s.comment, s.responded_at, u.name, u.email
+      SELECT s.step_order, s.status, s.role, s.comment, s.responded_at, u.name, u.email
       FROM approval_steps s JOIN users u ON s.user_id = u.id
       WHERE s.request_id = $1 ORDER BY s.step_order
     `, [step.request_id]);
 
     try {
       await sendDenialNotification(reqRows[0], allSteps, step);
+      // Notify observers of resolution
+      await notifyObservers(step.request_id, reqRows[0], allSteps, 'denied');
     } catch (err) {
       console.error('Failed to send denial notification:', err.message);
     }
@@ -142,5 +149,21 @@ router.post('/:token/deny', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+async function notifyObservers(requestId, request, allSteps, outcome) {
+  const { rows: observers } = await pool.query(`
+    SELECT s.*, u.name, u.email
+    FROM approval_steps s JOIN users u ON s.user_id = u.id
+    WHERE s.request_id = $1 AND s.role = 'observer'
+  `, [requestId]);
+
+  for (const observer of observers) {
+    try {
+      await sendObserverResolutionNotification(observer, request, allSteps, outcome);
+    } catch (err) {
+      console.error(`Failed to notify observer ${observer.email}:`, err.message);
+    }
+  }
+}
 
 module.exports = router;

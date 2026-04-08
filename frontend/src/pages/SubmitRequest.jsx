@@ -6,11 +6,13 @@ export default function SubmitRequest() {
   const [title, setTitle] = useState('')
   const [submitterName, setSubmitterName] = useState('')
   const [submitterEmail, setSubmitterEmail] = useState('')
-  const [chain, setChain] = useState([]) // [{id, name, email}]
+  const [notes, setNotes] = useState('')
+  const [chain, setChain] = useState([]) // [{id, name, email, role}]
   const [selectedUser, setSelectedUser] = useState('')
+  const [selectedRole, setSelectedRole] = useState('approver')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [submitted, setSubmitted] = useState(null) // { id, warning }
+  const [submitted, setSubmitted] = useState(null)
 
   useEffect(() => {
     fetch('/api/users')
@@ -24,12 +26,17 @@ export default function SubmitRequest() {
   function addToChain() {
     const user = users.find(u => u.id === parseInt(selectedUser))
     if (!user) return
-    setChain(prev => [...prev, user])
+    setChain(prev => [...prev, { ...user, role: selectedRole }])
     setSelectedUser('')
+    setSelectedRole('approver')
   }
 
   function removeFromChain(id) {
     setChain(prev => prev.filter(u => u.id !== id))
+  }
+
+  function updateRole(id, role) {
+    setChain(prev => prev.map(u => u.id === id ? { ...u, role } : u))
   }
 
   function moveUp(index) {
@@ -57,7 +64,8 @@ export default function SubmitRequest() {
     if (!title.trim()) return setError('Job title is required.')
     if (!submitterName.trim()) return setError('Your name is required.')
     if (!submitterEmail.trim()) return setError('Your email is required.')
-    if (chain.length === 0) return setError('Add at least one approver to the chain.')
+    if (chain.length === 0) return setError('Add at least one person to the chain.')
+    if (!chain.some(u => u.role === 'approver')) return setError('At least one Approver (not just Observers) is required.')
 
     setLoading(true)
     try {
@@ -68,7 +76,8 @@ export default function SubmitRequest() {
           title: title.trim(),
           submitted_by_name: submitterName.trim(),
           submitted_by_email: submitterEmail.trim(),
-          approver_ids: chain.map(u => u.id),
+          notes: notes.trim() || null,
+          approvers: chain.map(u => ({ id: u.id, role: u.role })),
         }),
       })
       const data = await res.json()
@@ -88,7 +97,7 @@ export default function SubmitRequest() {
         <div className="success-box">
           <div className="success-icon">✅</div>
           <h2>Request Submitted!</h2>
-          <p>The first approver has been notified by email.</p>
+          <p>Everyone in the chain has been notified. The first approver has been asked to review.</p>
           {submitted.warning && (
             <div className="alert alert-warning" style={{ textAlign: 'left' }}>
               {submitted.warning}
@@ -109,6 +118,7 @@ export default function SubmitRequest() {
                 setTitle('')
                 setSubmitterName('')
                 setSubmitterEmail('')
+                setNotes('')
                 setChain([])
               }}
             >
@@ -163,25 +173,49 @@ export default function SubmitRequest() {
               />
             </div>
           </div>
+
+          <div className="form-group">
+            <label>Notes / Comments <span style={{ color: 'var(--gray)', fontWeight: 400 }}>(optional — visible to everyone in the chain)</span></label>
+            <textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder="Add any context, requirements, or notes for the approvers..."
+              rows={3}
+            />
+          </div>
         </div>
 
         <div className="card">
           <h2>Approval Chain</h2>
           <p style={{ color: 'var(--gray)', fontSize: '0.88rem', marginBottom: 16 }}>
-            Add approvers in the order they should review the request. Each person will be notified only after the previous person approves.
+            Add people in order. <strong>Approvers</strong> must approve or deny. <strong>Observers</strong> are notified for visibility only — no action required from them.
+            Everyone is notified when the request is submitted.
           </p>
 
           {chain.length === 0 ? (
-            <p className="chain-builder-empty">No approvers added yet.</p>
+            <p className="chain-builder-empty">No one added yet.</p>
           ) : (
             <ul className="chain-builder-list">
               {chain.map((user, index) => (
-                <li key={user.id} className="chain-builder-item">
-                  <span className="chain-builder-num">{index + 1}</span>
+                <li key={user.id} className="chain-builder-item" style={{
+                  background: user.role === 'observer' ? '#eef2ff' : undefined,
+                  borderColor: user.role === 'observer' ? '#c7d2fe' : undefined,
+                }}>
+                  <span className="chain-builder-num" style={{
+                    background: user.role === 'observer' ? '#6366f1' : undefined,
+                  }}>{index + 1}</span>
                   <span className="chain-builder-name">
                     {user.name}
                     <span className="chain-builder-email" style={{ marginLeft: 8 }}>— {user.email}</span>
                   </span>
+                  <select
+                    value={user.role}
+                    onChange={e => updateRole(user.id, e.target.value)}
+                    style={{ width: 'auto', padding: '4px 8px', fontSize: '0.82rem' }}
+                  >
+                    <option value="approver">Approver</option>
+                    <option value="observer">Observer</option>
+                  </select>
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm btn-icon"
@@ -211,10 +245,18 @@ export default function SubmitRequest() {
               value={selectedUser}
               onChange={e => setSelectedUser(e.target.value)}
             >
-              <option value="">— Select an approver to add —</option>
+              <option value="">— Select a person to add —</option>
               {availableUsers.map(u => (
                 <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
               ))}
+            </select>
+            <select
+              value={selectedRole}
+              onChange={e => setSelectedRole(e.target.value)}
+              style={{ width: 'auto' }}
+            >
+              <option value="approver">Approver</option>
+              <option value="observer">Observer</option>
             </select>
             <button
               type="button"
@@ -222,7 +264,7 @@ export default function SubmitRequest() {
               onClick={addToChain}
               disabled={!selectedUser}
             >
-              Add to Chain
+              Add
             </button>
           </div>
 

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { pool } = require('../db');
 const { v4: uuidv4 } = require('uuid');
-const { sendApprovalRequest } = require('../services/email');
+const { sendApprovalRequest, sendInitialNotification } = require('../services/email');
 
 // Get all requests
 router.get('/', async (req, res) => {
@@ -21,7 +21,7 @@ router.get('/:id', async (req, res) => {
     if (!reqRows[0]) return res.status(404).json({ error: 'Request not found.' });
 
     const { rows: steps } = await pool.query(`
-      SELECT s.id, s.step_order, s.status, s.comment, s.responded_at, s.notified_at,
+      SELECT s.id, s.step_order, s.status, s.role, s.comment, s.responded_at, s.notified_at,
              u.name, u.email
       FROM approval_steps s
       JOIN users u ON s.user_id = u.id
@@ -37,43 +37,48 @@ router.get('/:id', async (req, res) => {
 
 // Create new request
 router.post('/', async (req, res) => {
-  const { title, submitted_by_name, submitted_by_email, approver_ids } = req.body;
+  const { title, submitted_by_name, submitted_by_email, notes, approvers } = req.body;
 
   if (!title?.trim()) return res.status(400).json({ error: 'Job title is required.' });
   if (!submitted_by_name?.trim()) return res.status(400).json({ error: 'Your name is required.' });
   if (!submitted_by_email?.trim()) return res.status(400).json({ error: 'Your email is required.' });
-  if (!Array.isArray(approver_ids) || approver_ids.length === 0) {
-    return res.status(400).json({ error: 'At least one approver is required.' });
+  if (!Array.isArray(approvers) || approvers.length === 0) {
+    return res.status(400).json({ error: 'At least one person in the chain is required.' });
+  }
+  if (!approvers.some(a => a.role === 'approver')) {
+    return res.status(400).json({ error: 'At least one Approver (not just Observers) is required.' });
   }
 
   const client = await pool.connect();
-  let requestId, firstStep;
+  let requestId, firstApproverStep;
 
   try {
     await client.query('BEGIN');
 
     const { rows: reqRows } = await client.query(
-      'INSERT INTO requests (title, submitted_by_name, submitted_by_email) VALUES ($1, $2, $3) RETURNING *',
-      [title.trim(), submitted_by_name.trim(), submitted_by_email.toLowerCase().trim()]
+      'INSERT INTO requests (title, submitted_by_name, submitted_by_email, notes) VALUES ($1, $2, $3, $4) RETURNING *',
+      [title.trim(), submitted_by_name.trim(), submitted_by_email.toLowerCase().trim(), notes?.trim() || null]
     );
     requestId = reqRows[0].id;
 
-    for (let i = 0; i < approver_ids.length; i++) {
+    let firstApproverFound = false;
+    for (let i = 0; i < approvers.length; i++) {
+      const { id: userId, role = 'approver' } = approvers[i];
       const token = uuidv4();
-      const status = i === 0 ? 'pending' : 'waiting';
+      let status;
+      if (role === 'observer') {
+        status = 'observer';
+      } else if (!firstApproverFound) {
+        status = 'pending';
+        firstApproverFound = true;
+      } else {
+        status = 'waiting';
+      }
       await client.query(
-        'INSERT INTO approval_steps (request_id, user_id, step_order, status, token) VALUES ($1, $2, $3, $4, $5)',
-        [requestId, approver_ids[i], i + 1, status, token]
+        'INSERT INTO approval_steps (request_id, user_id, step_order, status, role, token) VALUES ($1, $2, $3, $4, $5, $6)',
+        [requestId, userId, i + 1, status, role, token]
       );
     }
-
-    const { rows: stepRows } = await client.query(`
-      SELECT s.*, u.name, u.email
-      FROM approval_steps s
-      JOIN users u ON s.user_id = u.id
-      WHERE s.request_id = $1 AND s.step_order = 1
-    `, [requestId]);
-    firstStep = stepRows[0];
 
     await client.query('COMMIT');
   } catch (err) {
@@ -84,16 +89,33 @@ router.post('/', async (req, res) => {
   }
 
   const { rows: reqRows } = await pool.query('SELECT * FROM requests WHERE id = $1', [requestId]);
+  const request = reqRows[0];
+
   const { rows: allSteps } = await pool.query(`
-    SELECT s.step_order, s.status, s.comment, s.responded_at, u.name, u.email
+    SELECT s.id, s.step_order, s.status, s.role, s.token, s.comment, s.responded_at, u.name, u.email
     FROM approval_steps s JOIN users u ON s.user_id = u.id
     WHERE s.request_id = $1 ORDER BY s.step_order
   `, [requestId]);
 
+  // First approver gets the Action Required email
+  firstApproverStep = allSteps.find(s => s.status === 'pending');
+
   let emailWarning = null;
   try {
-    await sendApprovalRequest(firstStep, reqRows[0], allSteps);
-    await pool.query('UPDATE approval_steps SET notified_at = NOW() WHERE id = $1', [firstStep.id]);
+    // Send Action Required to first approver
+    await sendApprovalRequest(firstApproverStep, request, allSteps);
+    await pool.query('UPDATE approval_steps SET notified_at = NOW() WHERE id = $1', [firstApproverStep.id]);
+
+    // Send FYI notification to everyone else (waiting approvers + observers)
+    const othersToNotify = allSteps.filter(s => s.id !== firstApproverStep.id);
+    for (const step of othersToNotify) {
+      try {
+        await sendInitialNotification(step, request, allSteps);
+        await pool.query('UPDATE approval_steps SET notified_at = NOW() WHERE id = $1', [step.id]);
+      } catch (err) {
+        console.error(`Failed to notify ${step.email}:`, err.message);
+      }
+    }
   } catch (err) {
     const detail = err.response ? JSON.stringify(err.response.body) : err.message;
     console.error('Failed to send initial email:', detail);

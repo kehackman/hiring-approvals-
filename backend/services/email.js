@@ -14,27 +14,37 @@ function formatDate(dateStr) {
   });
 }
 
-function stepStatusColor(status) {
+function stepStatusColor(status, role) {
+  if (role === 'observer') return '#6366f1';
   if (status === 'approved') return '#16a34a';
   if (status === 'denied') return '#dc2626';
   if (status === 'pending') return '#d97706';
   return '#6b7280';
 }
 
-function stepStatusBg(status) {
+function stepStatusBg(status, role) {
+  if (role === 'observer') return '#eef2ff';
   if (status === 'approved') return '#f0fdf4';
   if (status === 'denied') return '#fef2f2';
   if (status === 'pending') return '#fffbeb';
   return '#f3f4f6';
 }
 
+function stepStatusLabel(status, role) {
+  if (role === 'observer') return 'Observer';
+  if (status === 'approved') return 'Approved';
+  if (status === 'denied') return 'Denied';
+  if (status === 'pending') return 'Awaiting Response';
+  return 'Waiting';
+}
+
 function chainSummaryHtml(allSteps) {
   return allSteps.map(s => `
-    <div style="padding: 10px 14px; margin: 6px 0; background: ${stepStatusBg(s.status)}; border-radius: 6px; border-left: 3px solid ${stepStatusColor(s.status)};">
+    <div style="padding: 10px 14px; margin: 6px 0; background: ${stepStatusBg(s.status, s.role)}; border-radius: 6px; border-left: 3px solid ${stepStatusColor(s.status, s.role)};">
       <div style="display: flex; justify-content: space-between; align-items: center;">
         <strong style="color: #111827;">${s.step_order}. ${s.name}</strong>
-        <span style="color: ${stepStatusColor(s.status)}; font-weight: 600; font-size: 0.85em; text-transform: uppercase;">
-          ${s.status}
+        <span style="color: ${stepStatusColor(s.status, s.role)}; font-weight: 600; font-size: 0.85em; text-transform: uppercase;">
+          ${stepStatusLabel(s.status, s.role)}
         </span>
       </div>
       <div style="color: #6b7280; font-size: 0.85em;">${s.email}</div>
@@ -42,6 +52,16 @@ function chainSummaryHtml(allSteps) {
       ${s.responded_at ? `<div style="margin-top: 4px; color: #9ca3af; font-size: 0.8em;">${formatDate(s.responded_at)}</div>` : ''}
     </div>
   `).join('');
+}
+
+function notesHtml(notes) {
+  if (!notes) return '';
+  return `
+    <div style="margin: 16px 0;">
+      <p style="margin: 0 0 6px; font-size: 0.85em; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em;">NOTES FROM SUBMITTER</p>
+      <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px 14px; font-style: italic; color: #374151;">${notes}</div>
+    </div>
+  `;
 }
 
 async function sendApprovalRequest(step, request, allSteps = []) {
@@ -81,6 +101,8 @@ async function sendApprovalRequest(step, request, allSteps = []) {
               </tr>
             </table>
           </div>
+
+          ${notesHtml(request.notes)}
 
           ${allSteps.length > 1 ? `
           <h3 style="font-size: 0.95rem; color: #374151; margin-bottom: 8px;">Full Approval Chain</h3>
@@ -230,9 +252,97 @@ async function sendReminder(step, request) {
   });
 }
 
+async function sendInitialNotification(step, request, allSteps) {
+  const trackingUrl = `${APP_URL}/request/${request.id}`;
+  const isObserver = step.role === 'observer';
+  const headerColor = isObserver ? '#6366f1' : '#1e40af';
+  const headerText = isObserver ? 'You\'ve Been Added as an Observer' : 'New Approval Request Submitted';
+  const bodyText = isObserver
+    ? 'You have been added as an observer to this request. No action is required from you — this is for your visibility only.'
+    : `You are Step ${step.step_order} in the approval chain. You will receive an email when it is your turn to review.`;
+
+  await sgMail.send({
+    from: `"Hiring Approvals" <${FROM_EMAIL}>`,
+    to: step.email,
+    subject: `FYI: New Approval Request — "${request.title}"`,
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; background: #f8fafc; padding: 20px;">
+        <div style="background: ${headerColor}; color: white; padding: 20px 24px; border-radius: 8px 8px 0 0;">
+          <h1 style="margin: 0; font-size: 1.2rem;">${headerText}</h1>
+        </div>
+        <div style="background: white; padding: 24px; border-radius: 0 0 8px 8px; border: 1px solid #e5e7eb; border-top: none;">
+          <p style="margin-top: 0;">Hello <strong>${step.name}</strong>,</p>
+          <p>${bodyText}</p>
+
+          <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 16px; margin: 20px 0;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 6px 0; color: #6b7280; font-size: 0.85em; width: 140px;">JOB TITLE</td>
+                <td style="padding: 6px 0; font-weight: 600; color: #111827;">${request.title}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #6b7280; font-size: 0.85em;">SUBMITTED BY</td>
+                <td style="padding: 6px 0; color: #111827;">${request.submitted_by_name} &lt;${request.submitted_by_email}&gt;</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #6b7280; font-size: 0.85em;">DATE SUBMITTED</td>
+                <td style="padding: 6px 0; color: #111827;">${formatDate(request.created_at)}</td>
+              </tr>
+            </table>
+          </div>
+
+          ${notesHtml(request.notes)}
+
+          <h3 style="font-size: 0.95rem; color: #374151; margin-bottom: 8px;">Approval Chain</h3>
+          ${chainSummaryHtml(allSteps)}
+
+          <div style="text-align: center; margin: 24px 0 8px;">
+            <a href="${trackingUrl}" style="display: inline-block; background: ${headerColor}; color: white; padding: 12px 28px; border-radius: 6px; text-decoration: none; font-weight: 700; font-size: 0.95rem;">
+              View Request Status
+            </a>
+          </div>
+        </div>
+      </div>
+    `,
+  });
+}
+
+async function sendObserverResolutionNotification(observer, request, allSteps, outcome) {
+  const trackingUrl = `${APP_URL}/request/${request.id}`;
+  const approved = outcome === 'approved';
+  const headerColor = approved ? '#16a34a' : '#dc2626';
+  const outcomeText = approved ? 'Fully Approved' : 'Denied';
+
+  await sgMail.send({
+    from: `"Hiring Approvals" <${FROM_EMAIL}>`,
+    to: observer.email,
+    subject: `FYI: Request ${outcomeText} — "${request.title}"`,
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; background: #f8fafc; padding: 20px;">
+        <div style="background: ${headerColor}; color: white; padding: 20px 24px; border-radius: 8px 8px 0 0;">
+          <h1 style="margin: 0; font-size: 1.2rem;">Request ${outcomeText}</h1>
+        </div>
+        <div style="background: white; padding: 24px; border-radius: 0 0 8px 8px; border: 1px solid #e5e7eb; border-top: none;">
+          <p style="margin-top: 0;">Hello <strong>${observer.name}</strong>,</p>
+          <p>The approval request for <strong>"${request.title}"</strong> has been <strong style="color: ${headerColor};">${outcomeText.toLowerCase()}</strong>.</p>
+
+          <h3 style="font-size: 0.95rem; color: #374151; margin-bottom: 8px;">Final Approval Chain</h3>
+          ${chainSummaryHtml(allSteps)}
+
+          <p style="color: #6b7280; font-size: 0.85em; margin-top: 20px; text-align: center;">
+            <a href="${trackingUrl}" style="color: #1e40af;">View full request details</a>
+          </p>
+        </div>
+      </div>
+    `,
+  });
+}
+
 module.exports = {
   sendApprovalRequest,
+  sendInitialNotification,
   sendDenialNotification,
   sendApprovedNotification,
+  sendObserverResolutionNotification,
   sendReminder,
 };

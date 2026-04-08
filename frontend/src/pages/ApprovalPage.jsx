@@ -9,11 +9,13 @@ function formatDate(str) {
   })
 }
 
-function statusLabel(status) {
-  if (status === 'approved') return 'Approved'
-  if (status === 'denied') return 'Denied'
-  if (status === 'pending') return 'Awaiting Your Response'
-  return 'Waiting'
+function stepBadge(step, isYou) {
+  const youLabel = isYou ? ' (You)' : ''
+  if (step.role === 'observer') return <span className="badge badge-observer">Observer{youLabel}</span>
+  if (step.status === 'approved') return <span className="badge badge-approved">Approved{youLabel}</span>
+  if (step.status === 'denied') return <span className="badge badge-denied">Denied{youLabel}</span>
+  if (step.status === 'pending') return <span className="badge badge-pending">Awaiting Response{youLabel}</span>
+  return <span className="badge badge-waiting">Waiting{youLabel}</span>
 }
 
 export default function ApprovalPage() {
@@ -22,8 +24,8 @@ export default function ApprovalPage() {
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
   const [comment, setComment] = useState('')
-  const [submitting, setSubmitting] = useState(null) // 'approve' | 'deny'
-  const [done, setDone] = useState(null) // 'approved' | 'denied'
+  const [submitting, setSubmitting] = useState(null)
+  const [done, setDone] = useState(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -67,6 +69,7 @@ export default function ApprovalPage() {
 
   const alreadyResponded = data.status !== 'pending'
   const requestClosed = data.request_status !== 'pending'
+  const isObserver = data.role === 'observer'
 
   if (done) {
     return (
@@ -106,51 +109,61 @@ export default function ApprovalPage() {
           </div>
           <div className="meta-item">
             <span className="meta-label">Your Role</span>
-            <span className="meta-value">Step {data.step_order} Approver</span>
+            <span className="meta-value">
+              {isObserver ? 'Observer (FYI only)' : `Step ${data.step_order} Approver`}
+            </span>
           </div>
         </div>
+
+        {data.notes && (
+          <>
+            <hr className="divider" />
+            <div>
+              <span className="meta-label">Notes from Submitter</span>
+              <p style={{ marginTop: 6, color: 'var(--text-secondary)', fontStyle: 'italic' }}>{data.notes}</p>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="card">
         <h2>Approval Chain</h2>
         <p style={{ color: 'var(--gray)', fontSize: '0.88rem', marginBottom: 16 }}>
-          All approvers and their current status are shown below.
+          All approvers and observers are shown below with their current status and comments.
         </p>
 
-        {data.all_steps.map((step) => (
-          <div key={step.step_order} className={`chain-step status-${step.status}`}>
-            <div className="step-number">{step.step_order}</div>
-            <div className="step-body">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
-                <div>
-                  <div className="step-name">
-                    {step.name}
-                    {step.step_order === data.step_order && (
-                      <span style={{ marginLeft: 8, fontSize: '0.78rem', color: 'var(--blue)', fontWeight: 600 }}>
-                        (You)
-                      </span>
-                    )}
+        {data.all_steps.map((step) => {
+          const isYou = step.step_order === data.step_order
+          return (
+            <div key={step.step_order} className={`chain-step status-${step.role === 'observer' ? 'observer' : step.status}`}>
+              <div className="step-number">{step.step_order}</div>
+              <div className="step-body">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+                  <div>
+                    <div className="step-name">{step.name}</div>
+                    <div className="step-email">{step.email}</div>
                   </div>
-                  <div className="step-email">{step.email}</div>
+                  {stepBadge(step, isYou)}
                 </div>
-                <span className={`badge badge-${step.status}`}>{statusLabel(step.status)}</span>
+                {step.comment && (
+                  <div className="step-comment">"{step.comment}"</div>
+                )}
+                {step.responded_at && (
+                  <div className="step-date">Responded {formatDate(step.responded_at)}</div>
+                )}
               </div>
-              {step.comment && (
-                <div className="step-comment">"{step.comment}"</div>
-              )}
-              {step.responded_at && (
-                <div className="step-date">Responded {formatDate(step.responded_at)}</div>
-              )}
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
 
       <div className="card">
-        {alreadyResponded ? (
-          <div
-            className={`already-responded alert alert-${data.status === 'approved' ? 'success' : 'error'}`}
-          >
+        {isObserver ? (
+          <div className="alert alert-info">
+            You are an <strong>observer</strong> on this request. No action is required from you — you have been added for visibility only.
+          </div>
+        ) : alreadyResponded ? (
+          <div className={`already-responded alert alert-${data.status === 'approved' ? 'success' : 'error'}`}>
             You already <strong>{data.status}</strong> this request
             {data.responded_at ? ` on ${formatDate(data.responded_at)}` : ''}.
             {data.comment && (
@@ -159,7 +172,7 @@ export default function ApprovalPage() {
           </div>
         ) : requestClosed ? (
           <div className="alert alert-warning">
-            This request has been <strong>{data.request_status}</strong> by another approver. No further action is needed.
+            This request has been <strong>{data.request_status}</strong>. No further action is needed.
           </div>
         ) : (
           <div>
@@ -168,7 +181,7 @@ export default function ApprovalPage() {
             {error && <div className="alert alert-error">{error}</div>}
 
             <div className="form-group">
-              <label>Comment <span style={{ color: 'var(--gray)', fontWeight: 400 }}>(optional — visible to all approvers)</span></label>
+              <label>Comment <span style={{ color: 'var(--gray)', fontWeight: 400 }}>(optional — visible to everyone in the chain)</span></label>
               <textarea
                 value={comment}
                 onChange={e => setComment(e.target.value)}

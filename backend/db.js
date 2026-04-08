@@ -36,6 +36,11 @@ async function initDb() {
       notified_at TIMESTAMP
     );
   `);
+
+  // Migrations for new columns (safe to run repeatedly)
+  await pool.query('ALTER TABLE requests ADD COLUMN IF NOT EXISTS notes TEXT');
+  await pool.query("ALTER TABLE approval_steps ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'approver'");
+
   console.log('Database initialized');
 }
 
