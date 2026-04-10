@@ -1,8 +1,63 @@
-const sgMail = require('@sendgrid/mail');
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-
 const APP_URL = process.env.APP_URL || 'http://localhost:5173';
-const FROM_EMAIL = process.env.FROM_EMAIL;
+const SENDER_EMAIL = process.env.MS_SENDER_EMAIL;
+
+// Token cache — Graph tokens are valid for ~1 hour
+let _tokenCache = { token: null, expiresAt: 0 };
+
+async function getAccessToken() {
+  if (_tokenCache.token && Date.now() < _tokenCache.expiresAt) {
+    return _tokenCache.token;
+  }
+
+  const url = `https://login.microsoftonline.com/${process.env.MS_TENANT_ID}/oauth2/v2.0/token`;
+  const body = new URLSearchParams({
+    client_id: process.env.MS_CLIENT_ID,
+    client_secret: process.env.MS_CLIENT_SECRET,
+    scope: 'https://graph.microsoft.com/.default',
+    grant_type: 'client_credentials',
+  });
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+
+  const data = await res.json();
+  if (!res.ok) throw new Error(`MS auth error: ${data.error_description || data.error}`);
+
+  // Cache with a 5-minute buffer before actual expiry
+  _tokenCache = {
+    token: data.access_token,
+    expiresAt: Date.now() + (data.expires_in - 300) * 1000,
+  };
+  return _tokenCache.token;
+}
+
+async function sendMail({ to, subject, html }) {
+  const token = await getAccessToken();
+
+  const res = await fetch(`https://graph.microsoft.com/v1.0/users/${SENDER_EMAIL}/sendMail`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      message: {
+        subject,
+        body: { contentType: 'HTML', content: html },
+        toRecipients: [{ emailAddress: { address: to } }],
+        from: { emailAddress: { address: SENDER_EMAIL, name: 'Hiring Approvals' } },
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Graph API sendMail error: ${err}`);
+  }
+}
 
 function formatDate(dateStr) {
   return new Date(dateStr).toLocaleDateString('en-US', {
@@ -68,8 +123,7 @@ async function sendApprovalRequest(step, request, allSteps = []) {
   const approvalUrl = `${APP_URL}/approve/${step.token}`;
   const trackingUrl = `${APP_URL}/request/${request.id}`;
 
-  await sgMail.send({
-    from: `"Hiring Approvals" <${FROM_EMAIL}>`,
+  await sendMail({
     to: step.email,
     subject: `Action Required: Approval for "${request.title}"`,
     html: `
@@ -131,8 +185,7 @@ async function sendApprovalRequest(step, request, allSteps = []) {
 }
 
 async function sendDenialNotification(request, allSteps, denier) {
-  await sgMail.send({
-    from: `"Hiring Approvals" <${FROM_EMAIL}>`,
+  await sendMail({
     to: request.submitted_by_email,
     subject: `Request Denied: "${request.title}"`,
     html: `
@@ -166,8 +219,7 @@ async function sendDenialNotification(request, allSteps, denier) {
 }
 
 async function sendApprovedNotification(request, allSteps) {
-  await sgMail.send({
-    from: `"Hiring Approvals" <${FROM_EMAIL}>`,
+  await sendMail({
     to: request.submitted_by_email,
     subject: `Fully Approved: "${request.title}"`,
     html: `
@@ -207,8 +259,7 @@ async function sendApprovedNotification(request, allSteps) {
 async function sendReminder(step, request) {
   const approvalUrl = `${APP_URL}/approve/${step.token}`;
 
-  await sgMail.send({
-    from: `"Hiring Approvals" <${FROM_EMAIL}>`,
+  await sendMail({
     to: step.email,
     subject: `Reminder: Approval Needed for "${request.title}"`,
     html: `
@@ -261,8 +312,7 @@ async function sendInitialNotification(step, request, allSteps) {
     ? 'You have been added as an observer to this request. No action is required from you — this is for your visibility only.'
     : `You are Step ${step.step_order} in the approval chain. You will receive an email when it is your turn to review.`;
 
-  await sgMail.send({
-    from: `"Hiring Approvals" <${FROM_EMAIL}>`,
+  await sendMail({
     to: step.email,
     subject: `FYI: New Approval Request — "${request.title}"`,
     html: `
@@ -313,8 +363,7 @@ async function sendObserverResolutionNotification(observer, request, allSteps, o
   const headerColor = approved ? '#16a34a' : '#dc2626';
   const outcomeText = approved ? 'Fully Approved' : 'Denied';
 
-  await sgMail.send({
-    from: `"Hiring Approvals" <${FROM_EMAIL}>`,
+  await sendMail({
     to: observer.email,
     subject: `FYI: Request ${outcomeText} — "${request.title}"`,
     html: `
