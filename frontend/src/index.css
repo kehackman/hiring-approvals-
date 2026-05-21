@@ -238,6 +238,7 @@ textarea {
 .badge-approved { background: var(--green-bg);  color: var(--green);  border: 1px solid var(--green-border); }
 .badge-denied   { background: var(--red-bg);    color: var(--red);    border: 1px solid var(--red-border); }
 .badge-waiting  { background: var(--gray-light); color: var(--gray);  border: 1px solid var(--gray-border); }
+.badge-filled   { background: #f0f9ff; color: #0369a1; border: 1px solid #7dd3fc; }
 .badge-observer { background: #eef2ff; color: #6366f1; border: 1px solid #c7d2fe; }
 
 /* ─── Tables ─── */

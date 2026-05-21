@@ -125,6 +125,24 @@ router.post('/', async (req, res) => {
   res.json({ id: requestId, warning: emailWarning });
 });
 
+// Mark an approved request as filled
+router.patch('/:id/status', async (req, res) => {
+  const { status } = req.body;
+  if (status !== 'filled') return res.status(400).json({ error: 'Only "filled" status is allowed via this endpoint.' });
+
+  try {
+    const { rows } = await pool.query('SELECT status FROM requests WHERE id = $1', [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'Request not found.' });
+    if (rows[0].status !== 'approved') {
+      return res.status(400).json({ error: 'Only approved requests can be marked as filled.' });
+    }
+    await pool.query('UPDATE requests SET status = $1 WHERE id = $2', ['filled', req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Delete a pending request
 router.delete('/:id', async (req, res) => {
   const client = await pool.connect();

@@ -12,6 +12,30 @@ export default function AllRequests() {
   const [requests, setRequests] = useState([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
+  const [confirmingId, setConfirmingId] = useState(null)
+  const [fillingId, setFillingId] = useState(null)
+
+  async function markFilled(id) {
+    setFillingId(id)
+    try {
+      const res = await fetch(`/api/requests/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'filled' }),
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        alert(data.error || 'Failed to update status.')
+        return
+      }
+      setRequests(prev => prev.map(r => r.id === id ? { ...r, status: 'filled' } : r))
+      setConfirmingId(null)
+    } catch {
+      alert('Failed to update status.')
+    } finally {
+      setFillingId(null)
+    }
+  }
 
   useEffect(() => {
     fetch('/api/requests')
@@ -40,7 +64,7 @@ export default function AllRequests() {
         <div className="card-header">
           <h2>Requests ({filtered.length})</h2>
           <div style={{ display: 'flex', gap: 8 }}>
-            {['all', 'pending', 'approved', 'denied'].map(f => (
+            {['all', 'pending', 'approved', 'filled', 'denied'].map(f => (
               <button
                 key={f}
                 className={`btn btn-sm ${filter === f ? 'btn-primary' : 'btn-secondary'}`}
@@ -91,9 +115,38 @@ export default function AllRequests() {
                       <span className={`badge badge-${r.status}`}>{r.status}</span>
                     </td>
                     <td>
-                      <Link to={`/request/${r.id}`} className="btn btn-secondary btn-sm">
-                        View
-                      </Link>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <Link to={`/request/${r.id}`} className="btn btn-secondary btn-sm">
+                          View
+                        </Link>
+                        {r.status === 'approved' && confirmingId !== r.id && (
+                          <button
+                            className="btn btn-sm"
+                            style={{ background: '#0369a1', color: 'white' }}
+                            onClick={() => setConfirmingId(r.id)}
+                          >
+                            Mark Filled
+                          </button>
+                        )}
+                        {r.status === 'approved' && confirmingId === r.id && (
+                          <span style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.85rem' }}>
+                            <span style={{ color: 'var(--gray)' }}>Confirm?</span>
+                            <button
+                              className="btn btn-sm btn-success"
+                              disabled={fillingId === r.id}
+                              onClick={() => markFilled(r.id)}
+                            >
+                              {fillingId === r.id ? '...' : 'Yes'}
+                            </button>
+                            <button
+                              className="btn btn-sm btn-secondary"
+                              onClick={() => setConfirmingId(null)}
+                            >
+                              No
+                            </button>
+                          </span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
